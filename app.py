@@ -16,6 +16,7 @@ load_dotenv()
 
 # =================== DB CONFIG ===================
 DB_URL = os.getenv("DATABASE_URL")
+BACKEND_URL = os.getenv("BACKEND_URL", "https://qr-code-apk-backend-1.onrender.com")
 
 
 JWT_SECRET = os.getenv("JWT_SECRET", "53b60c5b707b8de38f0a5a244c88c37147140c2bcdfb889a4d9e5f89962dff1d")
@@ -128,7 +129,7 @@ def get_profile(roll: str = Depends(get_current_roll)):
 
     photo_url = ""
     if row[5]:
-        photo_url = f"http://127.0.0.1:8000/api/photo/{roll}"
+        photo_url = f"{BACKEND_URL}/api/photo/{roll}"
 
     return StudentProfile(
         roll=str(row[0]),
