@@ -1,25 +1,22 @@
 import os
-import base64
 from datetime import datetime, timedelta
 from typing import List
 
-import pyodbc
+from urllib.parse import urlparse
+import psycopg2
 import jwt
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Body
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from fastapi import Body
 
 load_dotenv()
 
 # =================== DB CONFIG ===================
-DB_SERVER = os.getenv("DB_SERVER", "localhost\\SQLEXPRESS")
-DB_NAME   = os.getenv("DB_NAME", "studentattendanceDB")
-DB_USER   = os.getenv("DB_USER", "sa")
-DB_PASS   = os.getenv("DB_PASS", "Dabra12@")
-DB_DRIVER = os.getenv("DB_DRIVER", "ODBC Driver 17 for SQL Server")
+DB_URL = os.getenv("DATABASE_URL")
+
 
 JWT_SECRET = os.getenv("JWT_SECRET", "53b60c5b707b8de38f0a5a244c88c37147140c2bcdfb889a4d9e5f89962dff1d")
 JWT_EXP_MINUTES = int(os.getenv("JWT_EXP_MINUTES", 1440))
@@ -31,10 +28,9 @@ app = FastAPI(
 )
 
 # Allow CORS
-from fastapi.middleware.cors import CORSMiddleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production restrict to your frontend URL
+    allow_origins=["*"],  # Restrict in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -49,7 +45,7 @@ class StudentProfile(BaseModel):
     roll: str
     name: str
     branch: str
-    semester: str
+    dob: str
     issue_valid: str
     photo: str   # will now be URL instead of base64
 
@@ -59,16 +55,9 @@ class AttendanceRecord(BaseModel):
 
 # =================== DB CONNECTION ===================
 def get_connection():
-    conn_str = (
-        f"DRIVER={{{DB_DRIVER}}};"
-        f"SERVER={DB_SERVER};"
-        f"DATABASE={DB_NAME};"
-        f"UID={DB_USER};"
-        f"PWD={DB_PASS};"
-    )
     try:
-        return pyodbc.connect(conn_str)
-    except pyodbc.Error as e:
+        return psycopg2.connect(DB_URL, sslmode="require")
+    except psycopg2.Error as e:
         raise HTTPException(status_code=500, detail=f"Database connection error: {str(e)}")
 
 # =================== AUTH HELPERS ===================
@@ -104,7 +93,7 @@ def login(req: LoginRequest):
     cursor = conn.cursor()
     try:
         cursor.execute(
-            "SELECT roll FROM Students WHERE LTRIM(RTRIM(roll))=? AND LTRIM(RTRIM(pin))=?",
+            "SELECT roll FROM Students WHERE TRIM(roll)=%s AND TRIM(pin)=%s",
             (roll, pin)
         )
         row = cursor.fetchone()
@@ -119,14 +108,14 @@ def login(req: LoginRequest):
     return {"token": token}
 
 
-# ✅ PROFILE ENDPOINT (now returns URL for photo)
+# ✅ PROFILE ENDPOINT
 @app.get("/api/profile", response_model=StudentProfile)
 def get_profile(roll: str = Depends(get_current_roll)):
     conn = get_connection()
     cursor = conn.cursor()
     try:
         cursor.execute(
-            "SELECT roll, name, branch, semester, issue_valid, photo FROM Students WHERE roll=?",
+            "SELECT roll, name, branch, dob, issue_valid, photo FROM Students WHERE roll=%s",
             (roll,)
         )
         row = cursor.fetchone()
@@ -139,14 +128,13 @@ def get_profile(roll: str = Depends(get_current_roll)):
 
     photo_url = ""
     if row[5]:
-        # Instead of base64, return an API URLq
         photo_url = f"http://127.0.0.1:8000/api/photo/{roll}"
 
     return StudentProfile(
         roll=str(row[0]),
         name=str(row[1]),
         branch=str(row[2]),
-        semester=str(row[3]),
+        dob=str(row[3]),
         issue_valid=str(row[4]),
         photo=photo_url
     )
@@ -158,7 +146,7 @@ def get_student_photo(roll: str):
     conn = get_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute("SELECT photo FROM Students WHERE roll=?", (roll,))
+        cursor.execute("SELECT photo FROM Students WHERE roll=%s", (roll,))
         row = cursor.fetchone()
     finally:
         cursor.close()
@@ -174,6 +162,7 @@ def get_student_photo(roll: str):
     return FileResponse(photo_path)
 
 
+# ✅ Attendance Endpoint
 @app.get("/api/attendance", response_model=List[AttendanceRecord])
 def get_attendance(roll: str = Depends(get_current_roll)):
     conn = get_connection()
@@ -183,7 +172,7 @@ def get_attendance(roll: str = Depends(get_current_roll)):
             """
             SELECT date, status 
             FROM Attendance 
-            WHERE roll=? AND date >= DATEADD(MONTH, -4, GETDATE())
+            WHERE roll=%s AND date >= (CURRENT_DATE - INTERVAL '4 months')
             ORDER BY date DESC
             """,
             (roll,)
@@ -198,10 +187,9 @@ def get_attendance(roll: str = Depends(get_current_roll)):
         for row in rows
     ]
     return records
-# in FastAPI backend
 
-#---------------------------------forgot pin-----------------------------------------
 
+# ✅ Forgot PIN
 @app.post("/api/forgot-pin")
 def forgot_pin(data: dict = Body(...)):
     roll = data.get("roll")
@@ -214,21 +202,16 @@ def forgot_pin(data: dict = Body(...)):
     conn = get_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute(
-            "SELECT dob FROM Students WHERE roll=?", (roll,)
-        )
+        cursor.execute("SELECT dob FROM Students WHERE roll=%s", (roll,))
         row = cursor.fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Student not found")
 
-        db_dob = str(row[0]).split(" ")[0]  # keep date only
+        db_dob = str(row[0])
         if db_dob != dob:
             raise HTTPException(status_code=401, detail="DOB does not match")
 
-        cursor.execute(
-            "UPDATE Students SET pin=? WHERE roll=?",
-            (new_pin, roll)
-        )
+        cursor.execute("UPDATE Students SET pin=%s WHERE roll=%s", (new_pin, roll))
         conn.commit()
     finally:
         cursor.close()
