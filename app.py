@@ -129,7 +129,7 @@ def get_profile(roll: str = Depends(get_current_roll)):
 
     photo_url = ""
     if row[5]:
-        photo_url = f"{BACKEND_URL}/api/photo/{roll}"
+        photo_url = f"/api/photo/{roll}"
 
     return StudentProfile(
         roll=str(row[0]),
