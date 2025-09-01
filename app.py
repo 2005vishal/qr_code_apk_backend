@@ -11,13 +11,12 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from fastapi.responses import RedirectResponse
 
 load_dotenv()
 
 # =================== DB CONFIG ===================
 DB_URL = os.getenv("DATABASE_URL")
-BACKEND_URL = os.getenv("BACKEND_URL", "https://qr-code-apk-backend-1.onrender.com")
-
 
 JWT_SECRET = os.getenv("JWT_SECRET", "53b60c5b707b8de38f0a5a244c88c37147140c2bcdfb889a4d9e5f89962dff1d")
 JWT_EXP_MINUTES = int(os.getenv("JWT_EXP_MINUTES", 1440))
@@ -127,17 +126,13 @@ def get_profile(roll: str = Depends(get_current_roll)):
     if not row:
         raise HTTPException(status_code=404, detail="Student not found")
 
-    photo_url = ""
-    if row[5]:
-        photo_url = f"/api/photo/{roll}"
-
     return StudentProfile(
         roll=str(row[0]),
         name=str(row[1]),
         branch=str(row[2]),
         dob=str(row[3]),
         issue_valid=str(row[4]),
-        photo=photo_url
+        photo=str(row[5])
     )
 
 
@@ -156,11 +151,8 @@ def get_student_photo(roll: str):
     if not row or not row[0]:
         raise HTTPException(status_code=404, detail="Photo not found")
 
-    photo_path = row[0]
-    if not os.path.exists(photo_path):
-        raise HTTPException(status_code=404, detail="File not found on server")
-
-    return FileResponse(photo_path)
+    # row[0] is Cloudinary URL
+    return RedirectResponse(url=row[0])
 
 
 # ✅ Attendance Endpoint
